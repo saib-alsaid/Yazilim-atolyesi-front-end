@@ -1,6 +1,22 @@
-﻿﻿import { expect, test } from "@playwright/test";
+﻿import { expect, test } from "@playwright/test";
+
+// Server component'lerin fetch'i Node icinden gider; `page.route` bunu yakalayamaz.
+// Bu yuzden SSR icerigi tests/e2e/support/mock-content-api.mjs uzerinden kontrol edilir.
+const MOCK_API = "http://127.0.0.1:9099";
+
+async function setContentMode(mode: "proxy" | "malicious" | "fail") {
+  await fetch(`${MOCK_API}/__control`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+}
 
 test.describe("Kisi 5 - İletişim ve sayfa içerikleri", () => {
+  test.beforeEach(async () => {
+    await setContentMode("proxy");
+  });
+
   test("İletişim formu başarı senaryosu - 'Mesaj alındı' mesajı gösterilir", async ({ page }) => {
     await page.route("**/api/club/contact/messages", async (route) => {
       await route.fulfill({ status: 200, json: { id: "msg-123", message: "Mesaj alındı" } });
@@ -26,17 +42,18 @@ test.describe("Kisi 5 - İletişim ve sayfa içerikleri", () => {
     await page.getByRole("button", { name: "Mesaj gönder" }).first().click();
     const form = page.locator(".club-form");
     await form.getByLabel("Ad soyad").fill("Test Kullanıcı");
-    await form.getByLabel("E-posta").fill("gecersiz-email");
+    // type=email ve minLength tarayıcı doğrulamasını geçmeli; hata sunucudan gelmeli.
+    await form.getByLabel("E-posta").fill("gecersiz@ornek.test");
     await form.getByLabel("Konu").fill("Test konusu");
-    await form.getByLabel("Mesajın").fill("kısa");
+    await form.getByLabel("Mesajın").fill("Sunucu bu mesajı da geçersiz sayacak.");
     await form.getByRole("button", { name: "Mesaj gönder" }).click();
     const errorContainer = page.locator(".form-error");
     await expect(errorContainer).toContainText("E-posta geçerli bir adres değil.");
     await expect(errorContainer).toContainText("Mesaj en az 10 karakter olmalı.");
     await expect(form.getByLabel("Ad soyad")).toHaveValue("Test Kullanıcı");
-    await expect(form.getByLabel("E-posta")).toHaveValue("gecersiz-email");
+    await expect(form.getByLabel("E-posta")).toHaveValue("gecersiz@ornek.test");
     await expect(form.getByLabel("Konu")).toHaveValue("Test konusu");
-    await expect(form.getByLabel("Mesajın")).toHaveValue("kısa");
+    await expect(form.getByLabel("Mesajın")).toHaveValue("Sunucu bu mesajı da geçersiz sayacak.");
   });
 
   test("İletişim formu 429 Too Many Requests", async ({ page }) => {
@@ -58,22 +75,24 @@ test.describe("Kisi 5 - İletişim ve sayfa içerikleri", () => {
   });
 
   test("Güvenli render - HTML etiketleri düz metin olarak gösterilir", async ({ page }) => {
-    const maliciousHtml = "<script>alert(\"xss\")</script><b>Kalın Metin</b>Normal metin";
-    await page.route("**/api/club/pages/HOME", async (route) => {
-      await route.fulfill({ status: 200, json: { contents: [{ id: "hero-test", page: "HOME", contentType: "HERO", contentKey: "home-hero", title: maliciousHtml, subtitle: maliciousHtml, body: maliciousHtml, displayOrder: 10, active: true }] } });
+    const maliciousHtml = '<script>alert("xss")</script><b>Kalın Metin</b>Normal metin';
+    let dialogOpened = false;
+    page.on("dialog", async (dialog) => {
+      dialogOpened = true;
+      await dialog.dismiss();
     });
-    await page.route("**/api/club/pages/ABOUT", async (route) => { await route.fulfill({ status: 200, json: { contents: [] } }); });
-    await page.route("**/api/club/announcements**", async (route) => { await route.fulfill({ status: 200, json: { content: [], totalPages: 0 } }); });
+
+    await setContentMode("malicious");
     await page.goto("/");
-    await expect(page.getByText(maliciousHtml, { exact: true })).toBeVisible();
-    expect(await page.locator("script").count()).toBe(0);
-    await expect(page.locator("b:has-text('Kalın Metin')")).toHaveCount(0);
+
+    await expect(page.getByText(maliciousHtml).first()).toBeVisible();
+    await expect(page.locator("b", { hasText: "Kalın Metin" })).toHaveCount(0);
+    await expect(page.locator("script:has-text('alert(\"xss\")')")).toHaveCount(0);
+    expect(dialogOpened).toBe(false);
   });
 
   test("İçerik hatasında sayfanın çökmemesi - Graceful degradation", async ({ page }) => {
-    await page.route("**/api/club/pages/HOME", async (route) => { await route.abort("connectionfailed"); });
-    await page.route("**/api/club/pages/ABOUT", async (route) => { await route.abort("connectionfailed"); });
-    await page.route("**/api/club/announcements**", async (route) => { await route.fulfill({ status: 200, json: { content: [], totalPages: 0 } }); });
+    await setContentMode("fail");
     await page.goto("/");
     await expect(page.getByRole("banner")).toBeVisible();
     await expect(page.getByRole("main")).toBeVisible();
@@ -83,7 +102,6 @@ test.describe("Kisi 5 - İletişim ve sayfa içerikleri", () => {
 
   test("Mobil görünüm - 390x844", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.route("**/api/club/announcements**", async (route) => { await route.fulfill({ status: 200, json: { content: [], totalPages: 0 } }); });
     await page.goto("/");
     await expect(page.getByRole("banner")).toBeVisible();
     await expect(page.locator("#iletisim")).toBeAttached();
@@ -92,3 +110,4 @@ test.describe("Kisi 5 - İletişim ve sayfa içerikleri", () => {
     await expect(page.locator("#takim")).toBeAttached();
   });
 });
+

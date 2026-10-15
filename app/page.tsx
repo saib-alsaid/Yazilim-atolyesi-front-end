@@ -2,7 +2,6 @@ import { Header } from "../components/header";
 import { Hero } from "../components/hero";
 import {
   About,
-  Announcements,
   Footer,
   Join,
   Pillars,
@@ -36,10 +35,9 @@ export default async function Home() {
       <main id="main-content">
         {(hero) && <Hero block={hero as any} />}
         {other.length > 0 && <section className="managed-blocks page-width" aria-label="Kulüpten güncellemeler"><PublicBlocks blocks={other as any} /></section>}
-        <HomeAnnouncements items={announcements.items} live={announcements.live} />
         <Pillars />
         <div className="overview-grid page-width">
-          <Announcements items={announcements.items} live={announcements.live} />
+          <HomeAnnouncements items={announcements.items} live={announcements.live} />
           <About blocks={content.about as any} />
           <Join />
         </div>
